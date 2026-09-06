@@ -28,7 +28,7 @@ def extract_number_from_image(image_file, prompt, api_key):
     if not image_file or not api_key:
         return None
     try:
-        genai.configure(api_key=api_key)
+     model = genai.GenerativeModel('gemini-1.5-flash')
         # تم استخدام الموديل الأقوى والأكثر استقراراً
         model = genai.GenerativeModel('gemini-1.5-pro') 
         img = Image.open(image_file)
