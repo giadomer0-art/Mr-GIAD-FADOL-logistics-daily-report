@@ -28,7 +28,7 @@ def extract_number_from_image(image_file, prompt, api_key):
         return None
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash') # أسرع وأدق للأرقام
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')# أسرع وأدق للأرقام
         img = Image.open(image_file)
         response = model.generate_content([prompt, img])
         text = response.text.strip().replace(',', '')
