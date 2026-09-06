@@ -8,6 +8,7 @@ from PIL import Image
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 st.set_page_config(page_title="نظام تتبع المناديب", layout="wide", page_icon="🚚")
 
@@ -28,7 +29,8 @@ def extract_number_from_image(image_file, prompt, api_key):
         return None
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')# أسرع وأدق للأرقام
+        # تم استخدام الموديل الأقوى والأكثر استقراراً
+        model = genai.GenerativeModel('gemini-1.5-pro') 
         img = Image.open(image_file)
         response = model.generate_content([prompt, img])
         text = response.text.strip().replace(',', '')
@@ -228,4 +230,4 @@ if fuel_file and len(st.session_state.drivers_data) > 0:
                 st.download_button("📥 تحميل التقرير (Excel)", data=output, file_name="التقرير_اليومي_الاحترافي.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
             except Exception as e:
-                st.error(f"حدث خطأ: {e}")
+                st.error(f"حدث خطأ أثناء إنشاء التقرير: {e}")
