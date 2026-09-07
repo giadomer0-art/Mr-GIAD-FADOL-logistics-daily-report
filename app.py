@@ -3,8 +3,8 @@ import pandas as pd
 import io
 import time
 import re
-import google.generativeai as genai
-from PIL import Image
+import base64
+import requests
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -23,19 +23,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- AI Vision Function -----------------
+# ----------------- DIRECT API CALL (BULLETPROOF) -----------------
 def extract_number_from_image(image_file, prompt, api_key):
     if not image_file or not api_key:
         return None
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        img = Image.open(image_file)
-        response = model.generate_content([prompt, img])
-        text = response.text.strip().replace(',', '')
-        numbers = re.findall(r'\d+', text)
-        if numbers:
-            return int(numbers[0])
+        # تحويل الصورة إلى نص مشفر لإرسالها لجوجل مباشرة
+        base64_image = base64.b64encode(image_file.getvalue()).decode('utf-8')
+        mime_type = image_file.type
+        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": base64_image}}
+                ]
+            }]
+        }
+        
+        response = requests.post(url, json=payload)
+        
+        if response.status_code == 200:
+            data = response.json()
+            text = data['candidates'][0]['content']['parts'][0]['text']
+            text = text.strip().replace(',', '')
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                return int(numbers[0])
+        else:
+            st.error(f"خطأ في الاتصال: تأكد من مفتاح API")
         return None
     except Exception as e:
         st.error(f"خطأ في قراءة الصورة: {e}")
@@ -44,7 +62,7 @@ def extract_number_from_image(image_file, prompt, api_key):
 # ----------------- UI Sidebar (API Key) -----------------
 with st.sidebar:
     st.header("⚙️ إعدادات النظام")
-    api_key_input = st.text_input("أدخل مفتاح Gemini API السري:", type="password", help="مطلوب لتفعيل الذكاء الاصطناعي لقراءة الصور")
+    api_key_input = st.text_input("أدخل مفتاح Gemini API السري:", type="password")
     st.markdown("---")
     st.markdown("**كيف تحصل على المفتاح مجاناً؟**\n1. اذهب لموقع [Google AI Studio](https://aistudio.google.com/app/apikey)\n2. اضغط Create API Key\n3. انسخه والصقه هنا.")
 
