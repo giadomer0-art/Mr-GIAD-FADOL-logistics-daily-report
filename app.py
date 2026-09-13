@@ -1,250 +1,298 @@
-import streamlit as st
-import pandas as pd
+import base64
 import io
 import time
 import re
-import base64
-import requests
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
+import pandas as pd
+import requests
+import streamlit as st
+from supabase import Client, create_client
 
-st.set_page_config(page_title="نظام تتبع المناديب", layout="wide", page_icon="🚚")
+# ==========================================
+# 1. إعدادات الصفحة الأساسية
+# ==========================================
+st.set_page_config(page_title="المنصة المركزية لإدارة العمليات", layout="wide", page_icon="🚚")
 
-# Custom CSS
 st.markdown("""
 <style>
-    body { direction: RTL; text-align: right; }
+    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap');
+    body { direction: RTL; text-align: right; background-color: #f8fafc; }
     .stApp { direction: RTL; font-family: 'Tajawal', sans-serif; }
-    .driver-card { padding: 20px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 20px; background-color: #f9f9f9; }
-    h1, h2, h3, h4, p, span, label { text-align: right !important; }
-    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
+    .main-header {
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        color: white; padding: 1.8rem; border-radius: 14px;
+        margin-bottom: 1.5rem; text-align: center;
+        box-shadow: 0 8px 20px rgba(30, 60, 114, 0.15);
+    }
+    .dash-card { padding: 20px; border-radius: 12px; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.04); margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- DIRECT API CALL (BULLETPROOF) -----------------
-def extract_number_from_image(image_file, prompt, api_key):
-    if not image_file or not api_key:
-        return None
-    try:
-        # تحويل الصورة إلى نص مشفر لإرسالها لجوجل مباشرة
-        base64_image = base64.b64encode(image_file.getvalue()).decode('utf-8')
-        mime_type = image_file.type
-        
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": mime_type, "data": base64_image}}
-                ]
-            }]
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        if response.status_code == 200:
-            data = response.json()
-            text = data['candidates'][0]['content']['parts'][0]['text']
-            text = text.strip().replace(',', '')
-            numbers = re.findall(r'\d+', text)
-            if numbers:
-                return int(numbers[0])
-        else:
-            st.error(f"خطأ في الاتصال: تأكد من مفتاح API")
-        return None
-    except Exception as e:
-        st.error(f"خطأ في قراءة الصورة: {e}")
-        return None
+# ==========================================
+# 2. الثوابت والإعدادات (قواعد البيانات والبريد)
+# ==========================================
+SUPABASE_URL = "https://vnettsvcpqvfgdqimukk.supabase.co"
 
-# ----------------- UI Sidebar (API Key) -----------------
+# --- إعدادات الإيميل المكتملة كما طلبتِ ---
+SENDER_EMAIL = "giadomer0@gmail.com"
+RECEIVER_EMAIL = "gharibalhara@gmail.com"
+APP_PASSWORD = "Giad';lkjhgfdsaGIAD" 
+
 with st.sidebar:
-    st.header("⚙️ إعدادات النظام")
-    api_key_input = st.text_input("أدخل مفتاح Gemini API السري:", type="password")
-    st.markdown("---")
-    st.markdown("**كيف تحصل على المفتاح مجاناً؟**\n1. اذهب لموقع [Google AI Studio](https://aistudio.google.com/app/apikey)\n2. اضغط Create API Key\n3. انسخه والصقه هنا.")
+    st.image("https://cdn-icons-png.flaticon.com/512/411/411712.png", width=100)
+    st.markdown("### ⚙️ إعدادات النظام الأساسية")
+    supabase_key_input = st.text_input(
+        "مفتاح السحابة (Supabase):", type="password",
+        value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZuZXR0c3ZjcHF2ZmdkcWltdWtrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5ODU5MzUsImV4cCI6MjEwNDU2MTkzNX0.YzyZee6NZylZpxysi6TlWomf2l_YdVA9njZVOboU9KQ"
+    )
+    gemini_key_input = st.text_input(
+        "مفتاح الذكاء الاصطناعي (Gemini):", type="password",
+        value="AQ.Ab8RN6IXdqrpdjHEC77q7_D2KQ9U7drmmCVWiwBqH0jm1doHWw"
+    )
 
-st.title("📊 نظام الذكاء الاصطناعي لاستخراج تقارير المناديب")
+supabase: Client = None
+if supabase_key_input:
+    try:
+        supabase = create_client(SUPABASE_URL, supabase_key_input.strip())
+    except:
+        st.sidebar.error("⚠️ خطأ في الاتصال بقاعدة البيانات")
 
-# Initialize Session State
-if 'drivers_data' not in st.session_state:
-    st.session_state.drivers_data = []
-if 'driver_counter' not in st.session_state:
-    st.session_state.driver_counter = 1
+# ==========================================
+# 3. دوال العمليات (الإيميل، الذكاء الاصطناعي)
+# ==========================================
+def send_delay_email(driver_name, start_time_str, hours_passed):
+    try:
+        subject = f"🚨 عاجل: تأخير إغلاق وردية المندوب ({driver_name})"
+        body = f"""
+        مرحباً الإدارة الكريمة،
+        
+        هذا إشعار آلي من نظام الإدارة اللوجستية:
+        المندوب [{driver_name}] تجاوز مدة العمل المسموحة (12.5 ساعة).
+        
+        - وقت بدء الوردية (الخروج): {start_time_str}
+        - الساعات المنقضية حتى الآن: {hours_passed} ساعة.
+        
+        الرجاء التواصل مع المندوب للتأكد من إغلاق العداد ورفع ملخص الطلبات.
+        
+        مع تحيات،
+        نظام العمليات الآلي.
+        """
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = RECEIVER_EMAIL
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, APP_PASSWORD)
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        return False
 
-DRIVER_NAMES = [
-    "حمزة رياض - HAMZA RIAZ RIAZ AHMAD",
-    "الصديق الامين - ELSIDDIG ELAMIN ABBAS GADORA",
-    "محمد علي - MUHAMMAD ALI JAMIL",
-    "اقبال أكرم - MUHAMMAD IQBAL",
-    "أحمد سليمان - AHMED ABDALHAMED IBRAHIM SULIMAN",
-    "مد جوني - MD JONY",
-    "ناهد مولا - NAHID MOLLAH",
-    "مندوب آخر (كتابة يدوية)"
-]
-
-# ----------------- SECTION 1: ADD DRIVER -----------------
-st.header("1️⃣ إدخال صور المندوب")
-with st.container():
-    st.markdown('<div class="driver-card">', unsafe_allow_html=True)
-    
-    selected_driver = st.selectbox("اختر اسم المندوب", DRIVER_NAMES, key=f"d_select_{st.session_state.driver_counter}")
-    driver_name_input = st.text_input("أدخل اسم المندوب:") if selected_driver == "مندوب آخر (كتابة يدوية)" else selected_driver
+def check_overtime_drivers():
+    """التحقق من تجاوز 12.5 ساعة وإرسال الإيميل"""
+    if not supabase: return []
+    overtime_drivers = []
+    try:
+        active_logs = supabase.table('daily_logs').select("*").eq('shift_status', 'active').execute().data
+        now_utc = pd.Timestamp.now(tz='UTC')
+        
+        for log in active_logs:
+            created_at_utc = pd.to_datetime(log['created_at'])
+            if created_at_utc.tzinfo is None:
+                created_at_utc = created_at_utc.tz_localize('UTC')
+                
+            hours_passed = (now_utc - created_at_utc).total_seconds() / 3600.0
             
+            if hours_passed >= 12.5:
+                hours_rounded = round(hours_passed, 1)
+                start_time_str = created_at_utc.tz_convert('Asia/Riyadh').strftime('%Y-%m-%d %I:%M %p')
+                
+                overtime_drivers.append({'name': log['driver_name'], 'time': start_time_str, 'hours': hours_rounded})
+                
+                if not log.get('email_sent'):
+                    success = send_delay_email(log['driver_name'], start_time_str, hours_rounded)
+                    if success:
+                        supabase.table('daily_logs').update({'email_sent': True}).eq('id', log['id']).execute()
+    except Exception:
+        pass
+    return overtime_drivers
+
+def extract_number_from_image(image_file, prompt, api_key):
+    if not image_file or not api_key: return None
+    try:
+        base64_image = base64.b64encode(image_file.getvalue()).decode('utf-8')
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key.strip()}"
+        payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": image_file.type, "data": base64_image}}]}]}
+        resp = requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 200:
+            text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+            numbers = re.findall(r'\d+', text.replace(',', ''))
+            return int(numbers[0]) if numbers else None
+    except: return None
+
+def extract_orders_and_date(image_file, api_key):
+    """استخراج الطلبات الموصلة والمرتجعة وجمعهما"""
+    if not image_file or not api_key: return None, None
+    try:
+        base64_image = base64.b64encode(image_file.getvalue()).decode('utf-8')
+        prompt = """
+        Analyze this delivery summary image and extract:
+        1. Find the number of 'Delivered' orders (الطلبات الموصلة).
+        2. Find the number of 'Returned' or 'Return Pickups' orders (الطلبات المرتجعة).
+        3. Add BOTH numbers together to get the Total Orders.
+        4. Find the Date shown in the image.
+        Reply EXACTLY in this format and nothing else:
+        ORDERS: [Total Orders Number]
+        DATE: [YYYY-MM-DD]
+        """
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key.strip()}"
+        payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": image_file.type, "data": base64_image}}]}]}
+        resp = requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 200:
+            text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+            orders = re.search(r'ORDERS:\s*(\d+)', text, re.IGNORECASE)
+            date = re.search(r'DATE:\s*([^\n]+)', text, re.IGNORECASE)
+            o_count = int(orders.group(1)) if orders else None
+            d_str = date.group(1).strip() if date and date.group(1).strip().upper() not in ['NONE', 'NULL', '0'] else None
+            return o_count, d_str
+    except: pass
+    return None, None
+
+# ==========================================
+# 4. واجهة المستخدم (التنبيهات العلوية والتبويبات)
+# ==========================================
+st.markdown('<div class="main-header"><h1 style="color:white; margin:0;">🚚 المنصة المركزية لإدارة العمليات اللوجستية</h1></div>', unsafe_allow_html=True)
+
+# فحص المناديب المتأخرين وعرض تنبيهات حية
+delayed_list = check_overtime_drivers()
+if delayed_list:
+    for item in delayed_list:
+        st.error(f"🚨 **تنبيه عاجل:** المندوب **{item['name']}** تجاوز **{item['hours']} ساعة** من العمل (البداية: {item['time']}). (تم إرسال إشعار للإدارة).")
+
+tab_manual, tab_live, tab_fleet, tab_report = st.tabs([
+    "✍️ الإدخال اليدوي (للمدير)", "📡 المراقبة اللحظية (للتطبيق)", "👥 إدارة الأسطول", "📊 تقارير الأداء"
+])
+
+# --- تبويب الإدخال اليدوي ---
+with tab_manual:
+    st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+    st.subheader("إدخال بيانات المندوب يدوياً (مؤقت حتى اعتماد التطبيق)")
+    
+    drivers_list = ["-- اختر المندوب --"]
+    if supabase:
+        try:
+            drivers_data = supabase.table('drivers').select('name_ar').execute().data
+            drivers_list += [d['name_ar'] for d in drivers_data]
+        except: pass
+            
+    selected_driver = st.selectbox("👤 اسم المندوب:", drivers_list)
     st.markdown("---")
+    
     col_img1, col_img2, col_img3 = st.columns(3)
-    
     with col_img1:
-        st.write("🚚 صورة الطلبات")
-        orders_img = st.file_uploader("رفع الطلبات", type=['jpg', 'jpeg', 'png', 'webp'], key=f"ord_{st.session_state.driver_counter}", label_visibility="collapsed")
-        
+        orders_img = st.file_uploader("📦 صورة ملخص الطلبات", type=['jpg', 'jpeg', 'png'])
     with col_img2:
-        st.write("🟢 عداد الخروج")
-        start_odo_img = st.file_uploader("رفع الخروج", type=['jpg', 'jpeg', 'png', 'webp'], key=f"st_{st.session_state.driver_counter}", label_visibility="collapsed")
-        
+        start_odo_img = st.file_uploader("🟢 صورة عداد الخروج", type=['jpg', 'jpeg', 'png'])
     with col_img3:
-        st.write("🔴 عداد العودة")
-        end_odo_img = st.file_uploader("رفع العودة", type=['jpg', 'jpeg', 'png', 'webp'], key=f"en_{st.session_state.driver_counter}", label_visibility="collapsed")
-
-    if st.button("🤖 قراءة الصور وحفظ بيانات المندوب", type="primary"):
-        if not api_key_input:
-            st.error("⚠️ يرجى إدخال مفتاح API في القائمة الجانبية لتفعيل الذكاء الاصطناعي.")
-        elif driver_name_input:
-            with st.spinner('جاري تحليل الصور بالذكاء الاصطناعي...'):
-                orders_count = extract_number_from_image(orders_img, "Extract ONLY the number of 'Delivered Orders' or 'الطلبات الموصلة'. Return only digits.", api_key_input) if orders_img else None
-                start_odo = extract_number_from_image(start_odo_img, "Extract the ODO (odometer) distance reading. Return ONLY the number without km.", api_key_input) if start_odo_img else None
-                end_odo = extract_number_from_image(end_odo_img, "Extract the ODO (odometer) distance reading. Return ONLY the number without km.", api_key_input) if end_odo_img else None
-
-                arb_name = driver_name_input.split(" - ")[0]
-                eng_name = driver_name_input.split(" - ")[1] if " - " in driver_name_input else driver_name_input
-
-                st.session_state.drivers_data.append({
-                    "اسم المندوب": arb_name,
-                    "الاسم الإنجليزي": eng_name,
-                    "الطلبات": orders_count,
-                    "عداد الخروج": start_odo,
-                    "عداد العودة": end_odo
-                })
-                st.session_state.driver_counter += 1
-                st.success(f"✅ تم بنجاح استخراج: {orders_count or '-'} طلب | خروج: {start_odo or '-'} | عودة: {end_odo or '-'}")
-                time.sleep(2)
-                st.rerun()
+        end_odo_img = st.file_uploader("🔴 صورة عداد العودة", type=['jpg', 'jpeg', 'png'])
+        
+    if st.button("🤖 استخراج الذكاء الاصطناعي وحفظ بالسحابة", type="primary", use_container_width=True):
+        if selected_driver == "-- اختر المندوب --":
+            st.warning("الرجاء اختيار المندوب أولاً.")
+        elif not orders_img and not start_odo_img and not end_odo_img:
+            st.warning("الرجاء رفع صورة واحدة على الأقل.")
         else:
-            st.error("يرجى إدخال/اختيار اسم المندوب")
-    
+            with st.spinner("جاري التحليل واستخراج الأرقام..."):
+                orders_count, order_date = extract_orders_and_date(orders_img, gemini_key_input) if orders_img else (None, None)
+                start_odo = extract_number_from_image(start_odo_img, "Extract ONLY the ODO number.", gemini_key_input) if start_odo_img else None
+                end_odo = extract_number_from_image(end_odo_img, "Extract ONLY the ODO number.", gemini_key_input) if end_odo_img else None
+                
+                log_data = {
+                    'driver_name': selected_driver,
+                    'log_date': order_date if order_date else pd.Timestamp.now().strftime('%Y-%m-%d'),
+                    'shift_status': 'completed' if end_odo else 'active',
+                }
+                if start_odo: log_data['start_odo'] = start_odo
+                if end_odo: log_data['end_odo'] = end_odo
+                if orders_count is not None: log_data['orders_count'] = orders_count
+                if order_date: log_data['order_date'] = order_date
+                
+                supabase.table('daily_logs').insert(log_data).execute()
+                
+                st.success(f"✅ تم الحفظ! إجمالي الطلبات: {orders_count or '-'} | خروج: {start_odo or '-'} | عودة: {end_odo or '-'}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ----------------- SECTION 2: SAVED DRIVERS -----------------
-if st.session_state.drivers_data:
-    st.header(f"2️⃣ المناديب المسجلين حتى الآن ({len(st.session_state.drivers_data)})")
-    df_temp = pd.DataFrame(st.session_state.drivers_data)
-    st.dataframe(df_temp[["اسم المندوب", "الطلبات", "عداد الخروج", "عداد العودة"]], use_container_width=True)
-    if st.button("🗑️ مسح وإعادة تعيين"):
-        st.session_state.drivers_data = []
-        st.rerun()
-
-# ----------------- SECTION 3: FUEL & EXCEL GENERATION -----------------
-st.markdown("---")
-st.header("3️⃣ ملف البنزين وإنشاء التقرير الاحترافي")
-fuel_file = st.file_uploader("ارفع ملف البنزين بصيغة Excel (XLSX)", type=['xlsx'])
-
-if fuel_file and len(st.session_state.drivers_data) > 0:
-    if st.button("🚀 إنشاء وتنسيق التقرير النهائي", type="primary"):
-        with st.spinner("جاري دمج البيانات وتنسيق ملف الإكسل..."):
-            try:
-                # 1. Process Fuel Data
-                df_fuel = pd.read_excel(fuel_file)
-                fuel_summary = df_fuel.groupby('اسم السائق').agg(
-                    fuel_count=('رقم المعاملة', 'count'), fuel_cost=('القيمة', 'sum'), fuel_liters=('عدد اللترات', 'sum')
-                ).reset_index()
+# --- تبويب المراقبة اللحظية ---
+with tab_live:
+    st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+    st.subheader("📡 السجلات اللحظية للعمليات")
+    col_btn, col_info = st.columns([1, 4])
+    with col_btn:
+        if st.button("🔄 تحديث البيانات", use_container_width=True): st.rerun()
+    with col_info:
+        st.info(f"📧 سيتم إرسال إشعار التأخير إلى: {RECEIVER_EMAIL}")
+        
+    if supabase:
+        try:
+            logs = supabase.table('daily_logs').select("*").order('created_at', desc=True).limit(50).execute().data
+            if logs:
+                df_l = pd.DataFrame(logs)
+                df_l['المسافة المقطوعة'] = df_l.apply(
+                    lambda r: (r.get('end_odo', 0) - r.get('start_odo', 0)) if pd.notna(r.get('start_odo')) and pd.notna(r.get('end_odo')) else "-", axis=1
+                )
+                cols_to_show = ['driver_name', 'log_date', 'orders_count', 'shift_status', 'start_odo', 'end_odo', 'المسافة المقطوعة']
+                for c in cols_to_show:
+                    if c not in df_l.columns: df_l[c] = "-"
+                        
+                display_df = df_l[cols_to_show].copy()
+                display_df.rename(columns={
+                    'driver_name': 'المندوب', 'log_date': 'التاريخ', 'orders_count': 'إجمالي الطلبات', 
+                    'shift_status': 'حالة الوردية', 'start_odo': 'عداد الانطلاق', 'end_odo': 'عداد العودة'
+                }, inplace=True)
                 
-                fuel_dict = {row['اسم السائق']: {'count': row['fuel_count'], 'cost': row['fuel_cost'], 'liters': row['fuel_liters']} for _, row in fuel_summary.iterrows()}
-
-                # 2. Build Exact OpenPyXL File
-                wb = openpyxl.Workbook()
-                ws_summary = wb.active
-                ws_summary.title = "ملخص اليوم"
-                ws_summary.views.sheetView[0].rightToLeft = True
+                def color_status(val):
+                    color = '#dcfce3' if val == 'completed' else '#fee2e2'
+                    return f'background-color: {color}; font-weight: bold;'
                 
-                ws_fuel = wb.create_sheet(title="تفاصيل البنزين")
-                ws_fuel.views.sheetView[0].rightToLeft = True
+                st.dataframe(display_df.style.map(color_status, subset=['حالة الوردية']), use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد سجلات حالياً.")
+        except Exception as e:
+            st.error("جاري الاتصال بقاعدة البيانات...")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-                # Styles
-                header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-                header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-                data_font = Font(name="Calibri", size=11)
-                bold_font = Font(name="Calibri", size=11, bold=True)
-                tot_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-                thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
-                dbl_bot_border = Border(top=Side(style='thin', color='000000'), bottom=Side(style='double', color='000000'))
+# --- تبويب إدارة الأسطول ---
+with tab_fleet:
+    st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+    st.subheader("👥 بيانات المناديب")
+    if supabase:
+        try:
+            drivers = supabase.table('drivers').select("*").execute().data
+            if drivers:
+                df_d = pd.DataFrame(drivers)[['name_ar', 'phone', 'plate_number', 'app_password']]
+                df_d.rename(columns={'name_ar': 'الاسم', 'phone': 'رقم الجوال', 'plate_number': 'لوحة السيارة', 'app_password': 'رقم تطبيق الجوال'}, inplace=True)
+                st.dataframe(df_d, use_container_width=True, hide_index=True)
+        except: pass
+    st.markdown('</div>', unsafe_allow_html=True)
 
-                # Summary Headers
-                sum_headers = ["م", "اسم الموظف", "اسم الموظف بالانجليزي", "الطلبات", "عداد الخروج", "عداد العودة", "المسافة (كم)", "مرات التعبئة", "الوقود (لتر)", "التكلفة (ريال)"]
-                ws_summary.append(sum_headers)
-
-                # Summary Data
-                for r_idx, drv in enumerate(st.session_state.drivers_data, start=2):
-                    eng = drv['الاسم الإنجليزي']
-                    f_d = fuel_dict.get(eng, {'count': 0, 'liters': 0.0, 'cost': 0.0})
-                    dist_f = f'=IF(AND(ISNUMBER(E{r_idx}), ISNUMBER(F{r_idx})), F{r_idx}-E{r_idx}, "-")'
-                    
-                    row_data = [
-                        r_idx-1, drv['اسم المندوب'], eng, drv['الطلبات'] or "-", drv['عداد الخروج'] or "-", drv['عداد العودة'] or "-",
-                        dist_f, f_d['count'], f_d['liters'], f_d['cost']
-                    ]
-                    for c_idx, val in enumerate(row_data, 1):
-                        ws_summary.cell(row=r_idx, column=c_idx, value=val)
-
-                # Summary Totals
-                tot_r = len(st.session_state.drivers_data) + 2
-                ws_summary.cell(row=tot_r, column=1, value="")
-                ws_summary.cell(row=tot_r, column=2, value="الإجمالي")
-                ws_summary.cell(row=tot_r, column=4, value=f"=SUM(D2:D{tot_r-1})")
-                ws_summary.cell(row=tot_r, column=5, value="-")
-                ws_summary.cell(row=tot_r, column=6, value="-")
-                ws_summary.cell(row=tot_r, column=7, value=f'=SUMIF(G2:G{tot_r-1}, "<>-")')
-                ws_summary.cell(row=tot_r, column=8, value=f"=SUM(H2:H{tot_r-1})")
-                ws_summary.cell(row=tot_r, column=9, value=f"=SUM(I2:I{tot_r-1})")
-                ws_summary.cell(row=tot_r, column=10, value=f"=SUM(J2:J{tot_r-1})")
-
-                # Apply Styles to Summary
-                for c in range(1, 11):
-                    ws_summary.cell(row=1, column=c).fill = header_fill
-                    ws_summary.cell(row=1, column=c).font = header_font
-                    ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
-                    
-                    ws_summary.cell(row=tot_r, column=c).fill = tot_fill
-                    ws_summary.cell(row=tot_r, column=c).font = bold_font
-                    ws_summary.cell(row=tot_r, column=c).border = dbl_bot_border
-                    ws_summary.cell(row=tot_r, column=c).alignment = Alignment(horizontal="center", vertical="center")
-
-                for r in range(2, tot_r):
-                    for c in range(1, 11):
-                        cell = ws_summary.cell(row=r, column=c)
-                        cell.font = data_font
-                        cell.border = thin_border
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
-                        if c in [4, 5, 6] and isinstance(cell.value, (int, float)): cell.number_format = '#,##0'
-                        elif c == 9 and isinstance(cell.value, (int, float)): cell.number_format = '#,##0.000'
-                        elif c == 10 and isinstance(cell.value, (int, float)): cell.number_format = '#,##0.00'
-
-                for col in ws_summary.columns:
-                    ws_summary.column_dimensions[get_column_letter(col[0].column)].width = 16
-
-                # Fuel Sheet Data & Style (copy from df_fuel)
-                fuel_headers = list(df_fuel.columns)
-                ws_fuel.append(fuel_headers)
-                for r in dataframe_to_rows(df_fuel, index=False, header=False): ws_fuel.append(r)
-                
-                # Save to BytesIO
-                output = io.BytesIO()
-                wb.save(output)
-                output.seek(0)
-                
-                st.success("✅ تم إعداد التقرير بجميع التنسيقات الحقيقية!")
-                st.download_button("📥 تحميل التقرير (Excel)", data=output, file_name="التقرير_اليومي_الاحترافي.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                
-            except Exception as e:
-                st.error(f"حدث خطأ أثناء إنشاء التقرير: {e}")
+# --- تبويب التقارير ---
+with tab_report:
+    st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+    st.subheader("📊 تصدير التقرير النهائي (Excel)")
+    if st.button("🚀 تحميل التقرير التشغيلي الموحد", type="primary"):
+        if supabase:
+            logs = supabase.table('daily_logs').select("*").order('created_at', desc=True).execute().data
+            if logs:
+                df_export = pd.DataFrame(logs)
+                out = io.BytesIO()
+                df_export.to_excel(out, index=False)
+                out.seek(0)
+                st.download_button("📥 اضغط هنا لتحميل الملف", data=out, file_name="التقرير_التشغيلي_للمناديب.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.markdown('</div>', unsafe_allow_html=True)
