@@ -1,6 +1,5 @@
 streamlit
+supabase
 pandas
 openpyxl
-xlsxwriter
-google-generativeai==0.8.2
-pillow
+requests
