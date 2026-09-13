@@ -36,7 +36,7 @@ st.markdown("""
 # ==========================================
 SUPABASE_URL = "https://vnettsvcpqvfgdqimukk.supabase.co"
 
-# --- إعدادات الإيميل المكتملة كما طلبتِ ---
+# --- إعدادات الإيميل المكتملة ---
 SENDER_EMAIL = "giadomer0@gmail.com"
 RECEIVER_EMAIL = "gharibalhara@gmail.com"
 APP_PASSWORD = "Giad';lkjhgfdsaGIAD" 
@@ -188,8 +188,14 @@ with tab_manual:
     drivers_list = ["-- اختر المندوب --"]
     if supabase:
         try:
-            drivers_data = supabase.table('drivers').select('name_ar').execute().data
-            drivers_list += [d['name_ar'] for d in drivers_data]
+            drivers_data = supabase.table('drivers').select('*').execute().data
+            unique_names = set()
+            for d in drivers_data:
+                # تصفية الأسماء المكررة واعتماد المتوفر (عربي أو إنجليزي)
+                name = d.get('name_ar') or d.get('name_en') or d.get('name')
+                if name and str(name).strip():
+                    unique_names.add(str(name).strip())
+            drivers_list += sorted(list(unique_names))
         except: pass
             
     selected_driver = st.selectbox("👤 اسم المندوب:", drivers_list)
